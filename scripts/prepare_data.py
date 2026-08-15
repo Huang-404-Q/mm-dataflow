@@ -1,17 +1,30 @@
 #!/usr/bin/env python3
 """Convert LLaVA-Instruct-150K into the pipeline's JSONL format and sample it.
 
-Expects the raw annotation JSON (llava_instruct_150k.json) plus a COCO
-train2014 image directory. Samples whose image is missing on disk are skipped,
-so a partial image download still yields a usable dataset.
+Expects the raw annotation JSON (llava_instruct_150k.json). LLaVA-Instruct-150K
+references COCO **train2014** images (not train2017).
+
+Two flows, depending on whether the images are already local:
+
+  A. Images already on disk -- sample only records whose image exists:
+
+        python scripts/prepare_data.py --annotations data/raw/llava_instruct_150k.json \\
+            --image-root data/images --n 25000 --output data/clean_25k.jsonl
+
+  B. No images yet -- decide the sample set first, then fetch only what it
+     references (~20k unique images / ~3.5GB, versus 13GB for all of train2014):
+
+        python scripts/prepare_data.py --annotations data/raw/llava_instruct_150k.json \\
+            --image-root data/images --n 25000 --output data/clean_25k.jsonl \\
+            --no-require-image
+        python scripts/fetch_images.py --input data/clean_25k.jsonl \\
+            --image-root data/images
+
+Get the annotations with:
 
     export HF_ENDPOINT=https://hf-mirror.com
-    huggingface-cli download liuhaotian/LLaVA-Instruct-150K \
+    huggingface-cli download liuhaotian/LLaVA-Instruct-150K \\
         llava_instruct_150k.json --repo-type dataset --local-dir data/raw
-
-    python scripts/prepare_data.py \
-        --annotations data/raw/llava_instruct_150k.json \
-        --image-root data/images --n 15000 --output data/clean_15k.jsonl
 """
 from __future__ import annotations
 
@@ -53,8 +66,12 @@ def main() -> None:
     p.add_argument("--n", type=int, default=15000)
     p.add_argument("--output", required=True)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--require-image", action="store_true", default=True,
-                   help="skip records whose image file is absent (default on)")
+    p.add_argument("--require-image", dest="require_image", action="store_true",
+                   default=True,
+                   help="skip records whose image file is absent (default)")
+    p.add_argument("--no-require-image", dest="require_image", action="store_false",
+                   help="keep records regardless -- use this to decide the sample "
+                        "set first, then feed it to scripts/fetch_images.py")
     args = p.parse_args()
 
     with open(args.annotations, "r", encoding="utf-8") as f:

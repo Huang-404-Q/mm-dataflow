@@ -6,8 +6,8 @@
 > not asserted: noise is injected with ground-truth labels, so every operator's
 > precision and recall is exactly computable.
 
-**当前状态**：Week 2 进行中 —— 核心框架 + 9 个算子 + 噪声注入 + 算子评估闭环 + 多进程并行执行
-已跑通（51 个单测全绿）。Week 3 做微调对照实验。
+**当前状态**：Week 2 完成 —— 核心框架 + 9 个算子 + 噪声注入 + 算子评估闭环 + 多进程并行执行
++ COCO 按需下载（62 个单测全绿）。Week 3 做微调对照实验。
 
 ---
 
@@ -35,7 +35,8 @@ raw dataset (clean + labelled noise)
 │ stage2 rule(pixel) 模糊度 (Laplacian 方差)      │  解码像素
 │ stage3 dedup       pHash 去重 (图文对级)        │  全局算子
 │ stage4 perception  CLIP 图文相似度              │  GPU，填充共享 embedding 缓存
-│ stage5 (Week2)     美学打分 / 语义去重 / OCR     │  复用上面的缓存
+│ stage5 perception  美学打分 / OCR 文本占比      │  复用上面的缓存，零额外前向
+│ stage6 dedup       语义去重 (CLIP + 并查集)     │  全局算子
 └────────────────────┬───────────────────────────┘
                      │
    ┌─────────────────┼──────────────────┐
@@ -59,7 +60,7 @@ cleaned.jsonl   annotated.jsonl     report.md
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-# 1. 生成合成数据（COCO 13GB 下载期间可先用它验证框架）
+# 1. 生成合成数据（真实数据下载期间可先用它验证框架）
 .venv/bin/python scripts/make_synthetic.py --n 200 --out-dir data/synthetic
 
 # 2. 注入带真值标签的噪声
@@ -77,6 +78,31 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 产物：`outputs/dev/report.md`（流水线报告）、`outputs/dev/op_eval.md`（算子 P/R）。
 
+### 用真实数据（COCO + LLaVA-Instruct-150K）
+
+**先定样本集，再只下载它引用的图** —— COCO train2014 全量是 13GB / 83k 张
+（解压峰值 26GB），而 25k 条样本只引用约 2 万张、约 4GB：
+
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+huggingface-cli download liuhaotian/LLaVA-Instruct-150K \
+    llava_instruct_150k.json --repo-type dataset --local-dir data/raw
+
+# 1. 先采样，此时图还不在本地
+.venv/bin/python scripts/prepare_data.py \
+    --annotations data/raw/llava_instruct_150k.json \
+    --image-root data/images --n 25000 --output data/clean_25k.jsonl \
+    --no-require-image
+
+# 2. 只下这 25k 条引用到的图（可断点续传，重跑只补缺失的）
+.venv/bin/python scripts/fetch_images.py \
+    --input data/clean_25k.jsonl --image-root data/images --workers 16
+```
+
+实测 16 线程约 7 张/秒、单张平均 200KB，2 万张约 45 分钟 / 4GB。
+中断后重跑只补缺失的；下载走 `.part` 临时文件 + 原子改名，且会解码校验，
+不会留下「看起来存在、其实是半个」的文件。
+
 其他命令：
 
 ```bash
@@ -84,7 +110,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m mmdataflow run <cfg> --limit 500          # 抽样试跑
 .venv/bin/python -m mmdataflow run <cfg> --resume             # 从断点续跑
 .venv/bin/python -m mmdataflow run <cfg> --workers auto       # 规则算子多进程
-.venv/bin/python -m pytest tests/ -q                          # 51 tests
+.venv/bin/python -m pytest tests/ -q                          # 62 tests
 ```
 
 阈值扫描（从 P/R 曲线选阈值，而非拍脑袋）：
@@ -174,9 +200,9 @@ mmdataflow/ops/       算子实现，一个算子一个文件
 mmdataflow/report/    统计报告生成（JSON + Markdown）
 mmdataflow/bench/     吞吐基准（写入文档的数字必须来自这里）
 configs/              pipeline_dev.yaml（冒烟）、pipeline_bench.yaml（性能）、pipeline_full.yaml（25k 全量）
-scripts/              make_synthetic / prepare_data / inject_noise / eval_ops
+scripts/              make_synthetic / prepare_data / fetch_images / inject_noise / eval_ops
 docs/                 benchmarks.md
-tests/                51 个单测，每算子含正负样例
+tests/                62 个单测，每算子含正负样例
 ```
 
 完整的 4 周计划、实验设计与预算见 [`../PROJECT_PLAN.md`](../PROJECT_PLAN.md)。
