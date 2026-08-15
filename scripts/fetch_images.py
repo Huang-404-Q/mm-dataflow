@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Download only the COCO images a prepared dataset actually references.
 
-LLaVA-Instruct-150K draws on COCO train2014: 83k images, 13GB as a single zip
-(26GB peak, since the zip and its contents coexist during extraction). A 25k
-sample references roughly 20k unique images -- about 3.5GB. Fetching per-image
-is the difference between an overnight download and a coffee break, and it
-resumes for free: a re-run only fetches what is still missing.
+LLaVA-Instruct-150K draws on COCO: 81,479 unique images, 13GB as a single
+train2014 zip (26GB peak, since the zip and its contents coexist during
+extraction). A 25k-record sample references roughly 23k unique images -- about
+3.5GB at the measured 149KB average. Fetching per-image is the difference
+between an overnight download and a coffee break, and it resumes for free: a
+re-run only fetches what is still missing.
 
     python scripts/prepare_data.py --annotations data/raw/llava_instruct_150k.json \\
         --image-root data/images --n 25000 --output data/clean_25k.jsonl \\
@@ -18,7 +19,7 @@ where the rule operators are CPU-bound and processes are required.)
 
 Behind a slow link, mirror the base URL:
 
-    --base-url https://<your-mirror>/train2014
+    --base-url https://<your-mirror>/train2017
 """
 from __future__ import annotations
 
@@ -34,7 +35,11 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Set, Tuple
 
-COCO_TRAIN2014 = "http://images.cocodataset.org/train2014"
+# llava_instruct_150k.json stores bare COCO ids ("000000033471.jpg"). That is the
+# train2017 naming; train2014 hosts the same bytes under a COCO_train2014_ prefix.
+# Since train2014 is a subset of train2017, serving from train2017 covers every
+# referenced image and needs no filename rewriting. Verified by HEAD-probing both.
+COCO_TRAIN2017 = "http://images.cocodataset.org/train2017"
 
 
 def referenced_images(path: str) -> List[str]:
@@ -128,7 +133,9 @@ def main() -> int:
     p.add_argument("--input", required=True,
                    help="JSONL produced by prepare_data.py")
     p.add_argument("--image-root", required=True)
-    p.add_argument("--base-url", default=COCO_TRAIN2014)
+    p.add_argument("--base-url", default=COCO_TRAIN2017,
+                   help="images are requested as <base-url>/<basename>; point "
+                        "this at a mirror if the CDN is slow")
     p.add_argument("--workers", type=int, default=16,
                    help="concurrent downloads; raise for a fast link, lower if "
                         "the host starts rate-limiting")
