@@ -1,0 +1,47 @@
+# Smoke-test config: no model downloads required.
+# Runs the four CPU rule operators plus pHash dedup on synthetic data.
+#   python scripts/make_synthetic.py --n 200 --out-dir data/synthetic
+#   python scripts/inject_noise.py --input data/synthetic/clean.jsonl \
+#       --image-root data/synthetic/images --output data/synthetic/mixed.jsonl \
+#       --noise-image-dir data/synthetic/images_noise --scale 0.02
+#   python -m mmdataflow run configs/pipeline_dev.yaml
+name: dev
+input: data/synthetic/mixed.jsonl
+image_root: data/synthetic/images
+output_dir: outputs/dev
+device: auto
+cache_embeddings: true
+
+ops:
+  - name: image_resolution_filter
+    params:
+      min_side: 224
+      max_aspect_ratio: 3.0
+
+  - name: text_quality_filter
+    params:
+      min_chars: 10
+      max_rep_ratio: 0.30
+      max_junk_ratio: 0.15
+
+  - name: lang_id_filter
+    params:
+      keep_langs: [en]
+      min_confidence: 0.5
+      backend: auto        # falls back to the heuristic backend without lid.176.bin
+
+  - name: image_blur_filter
+    params:
+      # Calibrated on synthetic data by the P/R sweep, NOT transferable to real
+      # photos: flat procedural shapes carry far less high-frequency detail than
+      # photographs (clean images here score 4-587, degraded ones 0.3-2.0).
+      # Re-sweep on COCO before touching pipeline_full.yaml:
+      #   python scripts/eval_ops.py --input outputs/dev/annotated.jsonl \
+      #       --sweep blur_var --sweep-target lowquality_image
+      min_variance: 3.0
+
+  - name: phash_dedup
+    params:
+      hamming_threshold: 3
+      text_aware: true
+      text_sim_threshold: 0.90

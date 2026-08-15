@@ -1,0 +1,17 @@
+# Core framework + P0 operators (runs on CPU/MPS, no GPU required).
+PyYAML>=6.0
+numpy>=1.24
+Pillow>=10.0
+ImageHash>=4.3
+tqdm>=4.66
+pytest>=7.4
+
+# Perception operators. Install when running clip_score_filter onward.
+# torch>=2.1
+# torchvision>=0.16
+# transformers>=4.40
+
+# Week 2 additions
+# faiss-cpu>=1.7.4                 # semantic_dedup (falls back to numpy without it)
+# fasttext-wheel>=0.9.2            # lang_id_filter fasttext backend
+# paddlepaddle>=2.6, paddleocr>=2.7  # ocr_density_filter

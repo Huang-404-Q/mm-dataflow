@@ -1,0 +1,95 @@
+# Full pipeline over the 25k mixed dataset.
+# Operator order is cost-ascending: header reads, then text rules, then pixel
+# decoding, then the CLIP forward pass, then the global dedup pass. Each stage
+# shrinks the working set for the next, so the expensive stages see less data.
+name: full
+input: data/mixed_25k.jsonl
+image_root: data/images
+output_dir: outputs/full
+device: auto
+cache_embeddings: true
+
+ops:
+  # --- stage 1: cheap rules (no pixel decode) ---
+  - name: image_resolution_filter
+    params:
+      min_side: 224
+      max_side: 10000
+      max_aspect_ratio: 3.0
+
+  - name: text_quality_filter
+    params:
+      min_chars: 10
+      max_chars: 4000
+      max_rep_ratio: 0.30
+      max_junk_ratio: 0.15
+      ngram: 5
+
+  - name: lang_id_filter
+    params:
+      keep_langs: [en]
+      min_confidence: 0.5
+      backend: fasttext
+      model_path: models/lid.176.bin
+
+  # --- stage 2: pixel-level rules ---
+  - name: image_blur_filter
+    params:
+      min_variance: 100.0
+      resize_to: 512
+
+  # --- stage 3: pixel-level dedup (cheaper than semantic, so it runs first) ---
+  # text_aware is required, not optional: LLaVA-Instruct-150K attaches multiple
+  # conversations to the same COCO image, so image-only dedup deletes legitimate
+  # samples. See the operator docstring and outputs/dev/op_eval.md.
+  - name: phash_dedup
+    params:
+      hamming_threshold: 3
+      text_aware: true
+      text_sim_threshold: 0.90
+
+  # --- stage 4: perception; populates the shared embedding cache ---
+  # Threshold justified by the P/R sweep in outputs/full/op_eval.md:
+  #   python scripts/eval_ops.py --input outputs/full/annotated.jsonl \
+  #       --sweep clip_score --sweep-target mismatch
+  - name: clip_score_filter
+    params:
+      model_name: openai/clip-vit-large-patch14
+      threshold: 0.20
+      batch_size: 256
+
+  # --- stage 5: everything below reuses stage 4's cached embeddings ---
+  # These three operators would each need their own CLIP pass if they ran
+  # standalone. Placed after clip_score_filter they cost zero forward passes:
+  # ctx.embeddings is already warm, and the working set has shrunk twice over.
+
+  # A small MLP head on the 768-d CLIP embedding. 4.5 is the LAION-Aesthetics
+  # cutoff; re-sweep on COCO before trusting it:
+  #   python scripts/eval_ops.py --input outputs/full/annotated.jsonl \
+  #       --sweep aesthetic --sweep-target lowquality_image
+  - name: aesthetic_score_filter
+    params:
+      weights_path: models/aesthetic_l14.pth
+      min_score: 4.5
+      batch_size: 512
+
+  # Screenshots and document scans: sharp, well-proportioned, CLIP-consistent,
+  # but they teach layout rather than grounding.
+  - name: ocr_density_filter
+    params:
+      max_text_ratio: 0.25
+      lang: en
+      det_only: true
+      batch_size: 32
+
+  # --- stage 6: semantic dedup, last because it is a global pass ---
+  # Catches what pHash cannot: rescale+crop near-duplicates beyond Hamming 3,
+  # and different photographs of the same scene. Same text_aware guard applies.
+  - name: semantic_dedup
+    params:
+      sim_threshold: 0.92
+      text_aware: true
+      text_sim_threshold: 0.90
+      backend: auto
+      chunk_size: 1024
+

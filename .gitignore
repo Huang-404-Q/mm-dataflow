@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Data and run artefacts are reproducible from scripts/ -- never commit them.
+data/
+outputs/
+models/
+*.npz
